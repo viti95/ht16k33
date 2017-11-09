@@ -19,14 +19,12 @@
  * 2015-10-04  Peter Sjoberg <peters-alib AT techwiz.ca>
  *             Created using https://www.arduino.cc/en/Hacking/LibraryTutorial and ht16k33 datasheet
  * 2015-11-25  Peter Sjoberg <peters-alib AT techwiz DOT ca>
- *	       first check in to github
+ *	       	   First check in to github
  * 2016-08-09  René Wennekes <rene.wennekes AT gmail.com>
  *             Contribution of 7-segment & 16-segment display support
  *             Added clearAll() function
- *
- *
- *
- *
+ * 2017-11-09  Victor Nieto <victornt95 AT gmail.com>
+ *			   Optimization and simplification. Adapted to use on 1.2" 7-segment LED HT16K33 Backpack
  *
  */
 
@@ -42,8 +40,6 @@
 #define HT16K33_SS            B00100000 // System setup register
 #define HT16K33_SS_STANDBY    B00000000 // System setup - oscillator in standby mode
 #define HT16K33_SS_NORMAL     B00000001 // System setup - oscillator in normal mode
-#define HT16K33_KDAP          B01000000 // Key Address Data Pointer
-#define HT16K33_IFAP          B01100000 // Read status of INT flag
 #define HT16K33_DSP           B10000000 // Display setup
 #define HT16K33_DSP_OFF       B00000000 // Display setup - display off
 #define HT16K33_DSP_ON        B00000001 // Display setup - display on
@@ -73,8 +69,23 @@
 #define HT16K33_DIM_15        B00001110 // Dimming set - 15/16
 #define HT16K33_DIM_16        B00001111 // Dimming set - 16/16
 
+static const uint8_t seg7FontTable[]  = {
+  0b00111111, // 0
+  0b00110000, // 1
+  0b01011011, // 2
+  0b01111001, // 3
+  0b01110100, // 4
+  0b01101101, // 5
+  0b01101111, // 6
+  0b00111000, // 7
+  0b01111111, // 8
+  0b01111100, // 9
+  0b00000000  // space
+};
+
 // Constructor
 HT16K33::HT16K33(){
+	_seg7Font=(uint8_t*) &seg7FontTable;
 }
 
 /****************************************************************/
@@ -84,13 +95,11 @@ void HT16K33::begin(uint8_t address){
   uint8_t i;
   _address=address | BASEHTADDR;
   Wire.begin();
+  Wire.setClock(1000000L); // Specs set max 400kHZ, but my testing backpack supports this mode without problems
   i2c_write(HT16K33_SS  | HT16K33_SS_NORMAL); // Wakeup
   i2c_write(HT16K33_DSP | HT16K33_DSP_ON | HT16K33_DSP_NOBLINK); // Display on and no blinking
   i2c_write(HT16K33_RIS | HT16K33_RIS_OUT); // INT pin works as row output 
   i2c_write(HT16K33_DIM | HT16K33_DIM_16);  // Brightness set to max
-  //Clear all lights
-  //  memset(displayRam,0,sizeof(displayRam));
-  //  i2c_write(HT16K33_DDAP, displayRam,sizeof(displayRam),true);
   clearAll();
 } // begin
 
@@ -162,33 +171,6 @@ void HT16K33::clearAll(){
 } // clearAll
 
 /****************************************************************/
-// define seg7Font table
-//
-void HT16K33::define7segFont(uint8_t *ptr){
-  _seg7Font=ptr;
-} // define7segFont
-
-/****************************************************************/
-// define seg16Font table
-//
-void HT16K33::define16segFont(uint16_t *ptr){
-  _seg16Font=ptr;
-#ifdef PSDEBUG
-  Serial.print("DEBUG1: ");Serial.println((uint16_t)ptr,HEX);
-  Serial.println();
-  Serial.print("DEBUG2: ");Serial.println((uint16_t)_seg16Font,HEX);
-  Serial.println();
-  Serial.print("DEBUG3: ");Serial.println(ptr[0],HEX);
-  Serial.println(ptr[1],HEX);
-  Serial.println(ptr[2],HEX);
-  Serial.println();
-  Serial.print("DEBUG4: ");Serial.println(_seg16Font[0],HEX);
-  Serial.println(_seg16Font[1],HEX);
-  Serial.println(_seg16Font[2],HEX);
-#endif
-} // define16segFont
-
-/****************************************************************/
 // Put the chip to sleep
 //
 uint8_t HT16K33::sleep(){
@@ -196,7 +178,7 @@ uint8_t HT16K33::sleep(){
 } // sleep
 
 /****************************************************************/
-// Wake up the chip (after it been a sleep )
+// Wake up the chip (after it been a sleep)
 //
 uint8_t HT16K33::normal(){
   return i2c_write(HT16K33_SS|HT16K33_SS_NORMAL); // Start oscillator
@@ -261,81 +243,18 @@ uint8_t HT16K33::sendLed(){
 } // sendLed
 
 /****************************************************************/
-// set a single LED and update NOW
-//
-uint8_t HT16K33::setLedNow(uint8_t ledno){
-  uint8_t rc;
-  rc=setLed(ledno);
-  if (rc==0){
-    return sendLed();
-  } else {
-    return rc;
-  }
-} // setLedNow
-
-/****************************************************************/
-// clear a single LED and update NOW
-//
-uint8_t HT16K33::clearLedNow(uint8_t ledno){
-  uint8_t rc;
-  rc=clearLed(ledno);
-  if (rc==0){
-    return sendLed();
-  } else {
-    return rc;
-  }
-} // clearLedNow
-
-/****************************************************************/
 // Turn on one 7-segment but only in memory
 // To do it on chip a call to "sendLed" is needed
 //
-uint8_t HT16K33::set7Seg(uint8_t dig, uint8_t cha, boolean dp){ // position 0-15, 0-15 (0-F Hexadecimal), decimal point on|off
+uint8_t HT16K33::set7Seg(uint8_t dig, uint8_t cha){ // position 0-15, 0-15 (0-F Hexadecimal)
   if (cha>=0 && cha<16 && dig>=0 && dig<16){
-    if (dig>=0 && dig<=7) {dig = dig*2;} else {dig = ((dig-8)*2)+1;} //re-arrange digit positions
     uint8_t num = _seg7Font[cha];
-    if (dp) {bitSet(num,(7));} else {bitClear(num,(7));} //Set decimal point on 7th bit
     displayRam[dig] = num;
     return 0;
   } else {
     return 1;
   }
 } // set7Seg
-
-/****************************************************************/
-uint8_t HT16K33::set7SegRaw(uint8_t dig, uint8_t val) {
-  if (dig>=0 && dig<16) {
-    if (dig>=0 && dig<=7) {dig = dig*2;} else {dig = ((dig-8)*2)+1;} //re-arrange digit positions
-    displayRam[dig] = val;
-    return 0;
-  } else {
-    return 1;
-  }
-} // set7SegRaw
-
-/****************************************************************/
-// Turn on one 16-segment but only in memory
-// To do it on chip a call to "sendLed" is needed
-//
-uint8_t HT16K33::set16Seg(uint8_t dig, uint8_t cha){ // position 0-15, 0-15 (0-F Hexadecimal)
-  if (cha>=0 && cha<128 && dig>=0 && dig<8){
-    dig = dig*2;
-    // reverse the bits using a lookup table
-    //    displayRam[dig+1] = BitReverseTable256[lowByte(seg16Chartable[cha])];
-    //    displayRam[dig] = BitReverseTable256[highByte(seg16Chartable[cha])];
-    //    displayRam[dig] = lowByte(seg16Chartable[cha]);
-    //    displayRam[dig+1] = highByte(seg16Chartable[cha]);
-    displayRam[dig] = lowByte(_seg16Font[cha]);
-    displayRam[dig+1] = highByte(_seg16Font[cha]);
-    //    Serial.print(lowByte(_seg16Font[cha]),HEX);Serial.print(F(" "));Serial.println(highByte(&_seg16Font[cha]),HEX);
-#ifdef PSDEBUG
-    Serial.print((uint16_t)_seg16Font,HEX);Serial.print(F(":"));Serial.print(_seg16Font[cha] & 0xff,HEX);Serial.print(F(" "));Serial.println(_seg16Font[cha] >> 8,HEX);
-#endif
-    return 0;
-  } else {
-    return 1;
-  }
-} // set16Seg
 
 /****************************************************************/
 // Change brightness of the whole display
@@ -348,127 +267,6 @@ uint8_t HT16K33::setBrightness(uint8_t level){
     return 1;
   }
 } // setBrightness
-
-/****************************************************************/
-// Check the chips interrupt flag
-// 0 if no new key is pressed
-// !0 if some key is pressed and not yet read
-//
-uint8_t HT16K33::keyINTflag(){ 
-  return i2c_read(HT16K33_IFAP);
-} // keyINTflag
-
-/****************************************************************/
-// Check if any key is pressed
-// returns how many keys that are currently pressed
-// 
-
-//From http://stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer
-#ifdef __GNUC__
-  uint16_t _popcount(uint16_t x) {
-    return __builtin_popcount(x);
-  }
-#else
-  uint16_t _popcount(uint16_t i) {
-    i = i - ((i >> 1) & 0x55555555);
-    i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-    return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
-  }
-#endif
-
-uint8_t HT16K33::keysPressed(){ 
-  //  Serial.println(_keyram[0]|_keyram[1]|_keyram[2],HEX);
-  return (_popcount(_keyram[0])+_popcount(_keyram[1])+_popcount(_keyram[2]));
-} // keysPressed
-
-/****************************************************************/
-// Internal function - update cached key array
-//
-void HT16K33::_updateKeyram(){
-  uint8_t curkeyram[6];
-
-  i2c_read(HT16K33_KDAP, curkeyram, 6);
-  _keyram[0]=curkeyram[1]<<8 | curkeyram[0]; // datasheet page 21, 41H is high 40H is low
-  _keyram[1]=curkeyram[3]<<8 | curkeyram[2]; // or LSB MSB
-  _keyram[2]=curkeyram[5]<<8 | curkeyram[4];
-  return;
-} // _updateKeyram
-
-/****************************************************************/
-// return the key status
-//
-void HT16K33::readKeyRaw(HT16K33::KEYDATA keydata,boolean Fresh){
-  int8_t i;
-
-  // get the current state
-  if (Fresh) {_updateKeyram();}
-
-  for (i=0;i<3;i++){
-    keydata[i]=_keyram[i];
-  }
-
-  return;
-} // readKeyRaw
-
-/****************************************************************
- * read the keys and return the key that changed state
- * if more than one is pressed (compared to last scan) 
- * only one is returned, the first one found
- * 0 means no key pressed.
- * "1" means the key #1 is pressed
- * "-1" means the key #1 is released 
- * "clear"=true means it will only look keys currently pressed down.
- *     this is so you can detect what key is still pressed down after
- *     several keys are pressed down and then all but one is released
- *     (without keeping track of up/down separately)
- *
- *Observations:
- * As long as the key is pressed the keyram bit is set
- * the flag is set when key is pressed down but then cleared at first
- * read of key ram.
- * When released the key corresponding bit is cleared but the flag is NOT set
- * This means that the only way a key release can be detected is
- * by only polling readKey and ignoring flag
- * 
- */
-
-int8_t HT16K33::readKey(boolean clear){
-  static HT16K33::KEYDATA oldKeyData;
-  uint16_t diff;
-  uint8_t key;
-  int8_t i,j;
-
-    // save the current state
-  for (i=0;i<3;i++){
-    if (clear){
-      oldKeyData[i]=0;
-    } else {
-      oldKeyData[i]=_keyram[i];
-    }
-  }
-    
-  _updateKeyram();
-
-  key=0; //the key that changed state
-  for (i=0;i<3;i++){
-    diff=_keyram[i] ^ oldKeyData[i]; //XOR old and new, any changed bit is set.
-    if ( diff !=0 ){ // something did change
-      for (j=0;j<13;j++){
-	key++;
-	if (((diff >> j) & 1) == 1){
-	  if (((_keyram[i] >> j) & 1)==0){
-	    return -key;
-	  }else{
-	    return key;
-	  }
-	} // if keyram differs
-      } // for j in bits
-    } else {
-      key+=13;
-    } // if diff
-  } // for i
-  return 0; //apperently no new key was pressed - old might still be held down, pass clear=true to see it
-} // readKey
 
 /****************************************************************/
 // Make the display blink
@@ -491,14 +289,14 @@ uint8_t HT16K33::setBlinkRate(uint8_t rate){
 // turn on the display
 //
 void HT16K33::displayOn(){
-  i2c_write(HT16K33_DSP |HT16K33_DSP_ON);
+  i2c_write(HT16K33_DSP|HT16K33_DSP_ON);
 } // displayOn
 
 /****************************************************************/
 // turn off the display
 //
 void HT16K33::displayOff(){
-  i2c_write(HT16K33_DSP |HT16K33_DSP_OFF);
+  i2c_write(HT16K33_DSP|HT16K33_DSP_OFF);
 } // displayOff
 
 
