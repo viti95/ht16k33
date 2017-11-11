@@ -12,20 +12,6 @@
 // Define the class
 HT16K33 HT;
 
-/*static const uint8_t fontTable[]  = {
-  0b00111111, // 0
-  0b00110000, // 1
-  0b01011011, // 2
-  0b01111001, // 3
-  0b01110100, // 4
-  0b01101101, // 5
-  0b01101111, // 6
-  0b00111000, // 7
-  0b01111111, // 8
-  0b01111100, // 9
-  0b00000000  // space
-};*/
-
 int ExtractDigit(int V, int P)
 {
   unsigned long Pow = 1;
@@ -37,7 +23,6 @@ int ExtractDigit(int V, int P)
 /****************************************************************/
 void setup() {
   HT.begin(0x00);
-  //HT.define7segFont((uint8_t*) &fontTable);
 }
 
 /****************************************************************/
